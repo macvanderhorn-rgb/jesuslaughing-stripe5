@@ -2,8 +2,24 @@
 //
 // This is the ONLY place your Stripe SECRET key is used.
 // It runs on Netlify's servers, never in the browser.
+//
+// IMPORTANT: Keep this price list in sync with js/products.js on your site.
+// Amounts are in cents. This is what actually gets charged — never trust
+// a price or amount sent from the browser.
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
+const PRODUCTS = {
+  'jesus-laughing-5x7': { price: 999 },
+  'jesus-laughing-postcards-3x6': {
+    variants: { '5': 1299, '10': 1999, '20': 3499, '50': 9999 },
+  },
+  'jesus-laughing-original-8x11': { price: 999 },
+  'jesus-laughing-12x16': { price: 999 },
+  'jesus-laughing-pocket-cards-3x4': {
+    variants: { '5': 1299, '10': 1999, '20': 3499, '50': 9999 },
+  },
+};
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -33,30 +49,33 @@ exports.handler = async (event) => {
       };
     }
 
-    // IMPORTANT: Always calculate the amount on the server using your
-    // own price data — never trust an amount sent from the browser.
-    // Replace PRODUCT_PRICES with your real product catalog (in cents).
-    const PRODUCT_PRICES = {
-      'print-5x7': 1500,
-      'print-3x6-postcard': 800,
-      'print-8x11-vibrant': 2500,
-      'print-8x11-original': 2500,
-      'print-12x16': 4500,
-      'card-3x4-pocket': 500,
-      'tshirt': 2800,
-    };
-
     let amount = 0;
+
     for (const item of items) {
-      const price = PRODUCT_PRICES[item.id];
-      if (!price) {
+      const product = PRODUCTS[item.id];
+      if (!product) {
         return {
           statusCode: 400,
           headers: CORS_HEADERS,
           body: JSON.stringify({ error: `Unknown item: ${item.id}` }),
         };
       }
-      amount += price * (item.quantity || 1);
+
+      let unitPrice;
+      if (product.variants) {
+        unitPrice = product.variants[item.variant];
+        if (!unitPrice) {
+          return {
+            statusCode: 400,
+            headers: CORS_HEADERS,
+            body: JSON.stringify({ error: `Unknown pack size for ${item.id}: ${item.variant}` }),
+          };
+        }
+      } else {
+        unitPrice = product.price;
+      }
+
+      amount += unitPrice * (item.qty || 1);
     }
 
     const paymentIntent = await stripe.paymentIntents.create({
