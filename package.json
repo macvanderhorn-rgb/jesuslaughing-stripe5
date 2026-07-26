@@ -1,0 +1,8 @@
+{
+  "name": "jesuslaughing-stripe-functions",
+  "version": "1.0.0",
+  "description": "Netlify function for handling Stripe payments",
+  "dependencies": {
+    "stripe": "^17.0.0"
+  }
+}
