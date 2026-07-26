@@ -5,10 +5,21 @@
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
+
 exports.handler = async (event) => {
-  // Only allow POST requests
+  // Browsers send a preflight OPTIONS request before the real POST.
+  // We must answer it or the browser blocks the actual request.
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 200, headers: CORS_HEADERS, body: '' };
+  }
+
   if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, body: 'Method Not Allowed' };
+    return { statusCode: 405, headers: CORS_HEADERS, body: 'Method Not Allowed' };
   }
 
   try {
@@ -17,6 +28,7 @@ exports.handler = async (event) => {
     if (!items || !Array.isArray(items) || items.length === 0) {
       return {
         statusCode: 400,
+        headers: CORS_HEADERS,
         body: JSON.stringify({ error: 'No items provided' }),
       };
     }
@@ -40,6 +52,7 @@ exports.handler = async (event) => {
       if (!price) {
         return {
           statusCode: 400,
+          headers: CORS_HEADERS,
           body: JSON.stringify({ error: `Unknown item: ${item.id}` }),
         };
       }
@@ -54,12 +67,14 @@ exports.handler = async (event) => {
 
     return {
       statusCode: 200,
+      headers: CORS_HEADERS,
       body: JSON.stringify({ clientSecret: paymentIntent.client_secret }),
     };
   } catch (err) {
     console.error(err);
     return {
       statusCode: 500,
+      headers: CORS_HEADERS,
       body: JSON.stringify({ error: 'Something went wrong creating the payment.' }),
     };
   }
