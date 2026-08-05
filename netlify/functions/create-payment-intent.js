@@ -6,18 +6,25 @@
 // IMPORTANT: Keep this price list in sync with js/products.js on your site.
 // Amounts are in cents. This is what actually gets charged — never trust
 // a price or amount sent from the browser.
+//
+// TAX: Flat 6% Michigan sales tax, calculated here on the server (never
+// trust a tax amount sent from the browser either). $0 tax on orders
+// shipping outside Michigan, since you currently only have sales tax
+// nexus in Michigan. Revisit this if/when you register in other states.
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
+const MI_TAX_RATE = 0.06;
+
 const PRODUCTS = {
-  'jesus-laughing-5x7': { price: 999 },
+  'jesus-laughing-5x7': { price: 1800 },
   'jesus-laughing-postcards-3x6': {
-    variants: { '5': 1299, '10': 1999, '20': 3499, '50': 9999 },
+    variants: { '5': 1500, '10': 2200, '20': 3800, '50': 9500 },
   },
-  'jesus-laughing-original-8x11': { price: 999 },
-  'jesus-laughing-12x16': { price: 999 },
+  'jesus-laughing-original-8x11': { price: 2800 },
+  'jesus-laughing-12x16': { price: 4500 },
   'jesus-laughing-pocket-cards-3x4': {
-    variants: { '5': 1299, '10': 1999, '20': 3499, '50': 9999 },
+    variants: { '5': 1500, '10': 2200, '20': 3800, '50': 9500 },
   },
 };
 
@@ -28,8 +35,6 @@ const CORS_HEADERS = {
 };
 
 exports.handler = async (event) => {
-  // Browsers send a preflight OPTIONS request before the real POST.
-  // We must answer it or the browser blocks the actual request.
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 200, headers: CORS_HEADERS, body: '' };
   }
@@ -39,7 +44,7 @@ exports.handler = async (event) => {
   }
 
   try {
-    const { items } = JSON.parse(event.body);
+    const { items, address } = JSON.parse(event.body);
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return {
@@ -49,7 +54,15 @@ exports.handler = async (event) => {
       };
     }
 
-    let amount = 0;
+    if (!address || !address.line1 || !address.city || !address.state || !address.postal_code) {
+      return {
+        statusCode: 400,
+        headers: CORS_HEADERS,
+        body: JSON.stringify({ error: 'A complete shipping address is required.' }),
+      };
+    }
+
+    let subtotal = 0;
 
     for (const item of items) {
       const product = PRODUCTS[item.id];
@@ -75,19 +88,35 @@ exports.handler = async (event) => {
         unitPrice = product.price;
       }
 
-      amount += unitPrice * (item.qty || 1);
+      subtotal += unitPrice * (item.qty || 1);
     }
 
+    // Flat 6% Michigan sales tax only — $0 for every other state until
+    // you register elsewhere. State is normalized to handle "mi", "MI", " MI " etc.
+    const state = String(address.state || '').trim().toUpperCase();
+    const tax = state === 'MI' ? Math.round(subtotal * MI_TAX_RATE) : 0;
+    const total = subtotal + tax;
+
     const paymentIntent = await stripe.paymentIntents.create({
-      amount,
+      amount: total,
       currency: 'usd',
       automatic_payment_methods: { enabled: true },
+      metadata: {
+        shipping_state: state,
+        subtotal_cents: String(subtotal),
+        tax_cents: String(tax),
+      },
     });
 
     return {
       statusCode: 200,
       headers: CORS_HEADERS,
-      body: JSON.stringify({ clientSecret: paymentIntent.client_secret }),
+      body: JSON.stringify({
+        clientSecret: paymentIntent.client_secret,
+        subtotal,
+        tax,
+        total,
+      }),
     };
   } catch (err) {
     console.error(err);
