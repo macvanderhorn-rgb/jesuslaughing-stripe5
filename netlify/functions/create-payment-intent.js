@@ -5,12 +5,15 @@
 //
 // IMPORTANT: Keep this price list in sync with js/products.js on your site.
 // Amounts are in cents. This is what actually gets charged — never trust
-// a price or amount sent from the browser.
+// a price, discount, or tax amount sent from the browser.
 //
-// TAX: Flat 6% Michigan sales tax, calculated here on the server (never
-// trust a tax amount sent from the browser either). $0 tax on orders
-// shipping outside Michigan, since you currently only have sales tax
-// nexus in Michigan. Revisit this if/when you register in other states.
+// TAX: Flat 6% Michigan sales tax, calculated here on the server.
+// $0 tax on orders shipping outside Michigan, since you currently only
+// have sales tax nexus in Michigan.
+//
+// PROMO CODES: edit the PROMO_CODES list below to add/remove/change codes.
+// type: 'percent' -> value is a whole-number percent off (e.g. 10 = 10% off)
+// type: 'fixed'    -> value is a flat discount IN CENTS (e.g. 500 = $5.00 off)
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
@@ -28,11 +31,58 @@ const PRODUCTS = {
   },
 };
 
+// Example codes — replace with your own real ones.
+const PROMO_CODES = {
+  'WELCOME10': { type: 'percent', value: 10 },
+  'SAVE5': { type: 'fixed', value: 500 },
+};
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
+
+// Looks up unit price for a cart item, returns null if unknown.
+function unitPriceFor(item) {
+  const product = PRODUCTS[item.id];
+  if (!product) return null;
+  if (product.variants) {
+    return product.variants[item.variant] ?? null;
+  }
+  return product.price;
+}
+
+// Sums cart items into a subtotal in cents. Returns { error } or { subtotalCents }.
+function calcSubtotal(items) {
+  let subtotalCents = 0;
+  for (const item of items) {
+    const unitPrice = unitPriceFor(item);
+    if (unitPrice == null) {
+      const label = item.variant ? `${item.id} (${item.variant})` : item.id;
+      return { error: `Unknown item: ${label}` };
+    }
+    subtotalCents += unitPrice * (item.qty || 1);
+  }
+  return { subtotalCents };
+}
+
+// Validates a promo code against the subtotal.
+// Returns { code, valid, discountCents }. valid is null if no code was given.
+function getPromoDiscount(subtotalCents, rawCode) {
+  if (!rawCode) return { code: null, valid: null, discountCents: 0 };
+  const code = String(rawCode).trim().toUpperCase();
+  const promo = PROMO_CODES[code];
+  if (!promo) return { code, valid: false, discountCents: 0 };
+
+  let discountCents = promo.type === 'percent'
+    ? Math.round(subtotalCents * (promo.value / 100))
+    : promo.value;
+
+  // Never let a discount exceed the subtotal.
+  discountCents = Math.min(discountCents, subtotalCents);
+  return { code, valid: true, discountCents };
+}
 
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') {
@@ -44,13 +94,40 @@ exports.handler = async (event) => {
   }
 
   try {
-    const { items, address } = JSON.parse(event.body);
+    const { items, address, promoCode, validateOnly } = JSON.parse(event.body);
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return {
         statusCode: 400,
         headers: CORS_HEADERS,
         body: JSON.stringify({ error: 'No items provided' }),
+      };
+    }
+
+    const subtotalResult = calcSubtotal(items);
+    if (subtotalResult.error) {
+      return {
+        statusCode: 400,
+        headers: CORS_HEADERS,
+        body: JSON.stringify({ error: subtotalResult.error }),
+      };
+    }
+    const { subtotalCents } = subtotalResult;
+
+    const promoResult = getPromoDiscount(subtotalCents, promoCode);
+
+    // Promo-only check: used when the customer clicks "Apply" before
+    // they've entered a shipping address. No PaymentIntent is created yet.
+    if (validateOnly) {
+      return {
+        statusCode: 200,
+        headers: CORS_HEADERS,
+        body: JSON.stringify({
+          subtotal: subtotalCents,
+          promoCode: promoResult.code,
+          promoValid: promoResult.valid,
+          discount: promoResult.discountCents,
+        }),
       };
     }
 
@@ -62,40 +139,13 @@ exports.handler = async (event) => {
       };
     }
 
-    let subtotal = 0;
-
-    for (const item of items) {
-      const product = PRODUCTS[item.id];
-      if (!product) {
-        return {
-          statusCode: 400,
-          headers: CORS_HEADERS,
-          body: JSON.stringify({ error: `Unknown item: ${item.id}` }),
-        };
-      }
-
-      let unitPrice;
-      if (product.variants) {
-        unitPrice = product.variants[item.variant];
-        if (!unitPrice) {
-          return {
-            statusCode: 400,
-            headers: CORS_HEADERS,
-            body: JSON.stringify({ error: `Unknown pack size for ${item.id}: ${item.variant}` }),
-          };
-        }
-      } else {
-        unitPrice = product.price;
-      }
-
-      subtotal += unitPrice * (item.qty || 1);
-    }
+    const discountedSubtotal = subtotalCents - promoResult.discountCents;
 
     // Flat 6% Michigan sales tax only — $0 for every other state until
-    // you register elsewhere. State is normalized to handle "mi", "MI", " MI " etc.
+    // you register elsewhere. Tax is calculated on the post-discount amount.
     const state = String(address.state || '').trim().toUpperCase();
-    const tax = state === 'MI' ? Math.round(subtotal * MI_TAX_RATE) : 0;
-    const total = subtotal + tax;
+    const tax = state === 'MI' ? Math.round(discountedSubtotal * MI_TAX_RATE) : 0;
+    const total = discountedSubtotal + tax;
 
     const paymentIntent = await stripe.paymentIntents.create({
       amount: total,
@@ -103,7 +153,9 @@ exports.handler = async (event) => {
       automatic_payment_methods: { enabled: true },
       metadata: {
         shipping_state: state,
-        subtotal_cents: String(subtotal),
+        subtotal_cents: String(subtotalCents),
+        promo_code: promoResult.code || '',
+        discount_cents: String(promoResult.discountCents),
         tax_cents: String(tax),
       },
     });
@@ -113,7 +165,10 @@ exports.handler = async (event) => {
       headers: CORS_HEADERS,
       body: JSON.stringify({
         clientSecret: paymentIntent.client_secret,
-        subtotal,
+        subtotal: subtotalCents,
+        promoCode: promoResult.code,
+        promoValid: promoResult.valid,
+        discount: promoResult.discountCents,
         tax,
         total,
       }),
