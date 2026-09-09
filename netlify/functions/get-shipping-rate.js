@@ -26,6 +26,8 @@ const RETURN_ADDRESS_ID = "adr_02ab5df8ac0211f194390022480b361d";
 const EXPRESS_FLAT_PRICE = 15.0;
 
 // ---- Product -> package mapping ----
+// Keyed by the real product IDs from products.js. Products with pack-size
+// variants (postcards, pocket cards) are keyed as "id::variantLabel".
 // weight is in ounces, dimensions in inches (length, width, height).
 // These recorded weights are the PACKED item weight WITHOUT the shipping
 // label. A small buffer is added below (LABEL_WEIGHT_BUFFER_OZ) to cover the
@@ -34,22 +36,26 @@ const EXPRESS_FLAT_PRICE = 15.0;
 const LABEL_WEIGHT_BUFFER_OZ = 0.2;
 
 const PACKAGE_MAP = {
-  "print-5x7":     { length: 6,  width: 9,  height: 0.2, weight: 1.2 },
-  "print-8.5x11":  { length: 9,  width: 12, height: 0.2, weight: 2.5 },
-  "print-12x16":   { length: 13, width: 18, height: 0.2, weight: 8   },
+  "jesus-laughing-5x7":            { length: 6,  width: 9,  height: 0.2, weight: 1.2 },
+  "jesus-laughing-original-8x11":  { length: 9,  width: 12, height: 0.2, weight: 2.5 },
+  "jesus-laughing-12x16":          { length: 13, width: 18, height: 0.2, weight: 8   },
 
-  "pocketcard-5":  { length: 6,  width: 9,  height: 0.3, weight: 1.0 },
-  "pocketcard-10": { length: 6,  width: 9,  height: 0.3, weight: 1.2 },
-  "pocketcard-20": { length: 6,  width: 9,  height: 0.3, weight: 1.8 },
-  "pocketcard-50": { length: 6,  width: 9,  height: 0.5, weight: 3.4 },
+  "jesus-laughing-pocket-cards-3x4::5":  { length: 6, width: 9, height: 0.3, weight: 1.0 },
+  "jesus-laughing-pocket-cards-3x4::10": { length: 6, width: 9, height: 0.3, weight: 1.2 },
+  "jesus-laughing-pocket-cards-3x4::20": { length: 6, width: 9, height: 0.3, weight: 1.8 },
+  "jesus-laughing-pocket-cards-3x4::50": { length: 6, width: 9, height: 0.5, weight: 3.4 },
 
-  "postcard-5":    { length: 6,  width: 9,  height: 0.2, weight: 1.4 },
-  "postcard-10":   { length: 6,  width: 9,  height: 0.3, weight: 2.0 },
-  "postcard-20":   { length: 6,  width: 9,  height: 0.4, weight: 3.3 },
-  "postcard-50":   { length: 6,  width: 9,  height: 0.8, weight: 7.1 },
+  "jesus-laughing-postcards-3x6::5":  { length: 6, width: 9, height: 0.2, weight: 1.4 },
+  "jesus-laughing-postcards-3x6::10": { length: 6, width: 9, height: 0.3, weight: 2.0 },
+  "jesus-laughing-postcards-3x6::20": { length: 6, width: 9, height: 0.4, weight: 3.3 },
+  "jesus-laughing-postcards-3x6::50": { length: 6, width: 9, height: 0.8, weight: 7.1 },
 
-  // "tshirt": { length: __, width: __, height: __, weight: __ }, // add once measured
+  // "tshirt-...": { length: __, width: __, height: __, weight: __ }, // add once measured
 };
+
+function packageKeyFor(item) {
+  return item.variant ? `${item.id}::${item.variant}` : item.id;
+}
 
 // Combine multiple cart line items into ONE parcel by summing weight and
 // using the largest single-item dimensions as a stand-in "box" size.
@@ -63,11 +69,12 @@ function buildParcelFromCart(cartItems) {
   let totalHeight = 0; // stack heights as a rough approximation
 
   for (const item of cartItems) {
-    const pkg = PACKAGE_MAP[item.sku];
+    const key = packageKeyFor(item);
+    const pkg = PACKAGE_MAP[key];
     if (!pkg) {
-      throw new Error(`No package info found for SKU: ${item.sku}`);
+      throw new Error(`No package info found for product: ${key}`);
     }
-    const qty = item.quantity || 1;
+    const qty = item.qty || item.quantity || 1;
     totalWeight += pkg.weight * qty;
     maxLength = Math.max(maxLength, pkg.length);
     maxWidth = Math.max(maxWidth, pkg.width);
@@ -92,18 +99,29 @@ exports.handler = async function (event, context) {
   }
 
   try {
-    const { cartItems, toAddress } = JSON.parse(event.body);
-    // toAddress example:
-    // { name, street1, street2, city, state, zip, country: "US" }
+    // Matches the same request shape checkout.js already sends to
+    // create-payment-intent.js: { items, address, name }
+    // items: [{ id, variant, qty }], address: { line1, line2, city, state, postal_code }
+    const { items, address, name } = JSON.parse(event.body);
 
-    if (!cartItems || !cartItems.length || !toAddress) {
+    if (!items || !items.length || !address) {
       return {
         statusCode: 400,
-        body: JSON.stringify({ error: "Missing cartItems or toAddress" }),
+        body: JSON.stringify({ error: "Missing items or address" }),
       };
     }
 
-    const parcel = buildParcelFromCart(cartItems);
+    const toAddress = {
+      name: name || "Customer",
+      street1: address.line1,
+      street2: address.line2 || "",
+      city: address.city,
+      state: address.state,
+      zip: address.postal_code,
+      country: "US",
+    };
+
+    const parcel = buildParcelFromCart(items);
 
     const response = await fetch("https://api.easypost.com/v2/shipments", {
       method: "POST",
