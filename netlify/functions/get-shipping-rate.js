@@ -25,6 +25,15 @@ const RETURN_ADDRESS_ID = "adr_02ab5df8ac0211f194390022480b361d";
 // price, not a pass-through of the real carrier rate.
 const EXPRESS_FLAT_PRICE = 15.0;
 
+// Needed because your site (jesuslaughing.shop) and this function
+// (jesuslaughing.netlify.app) are on different domains — without these
+// headers, the browser blocks the response before your frontend ever sees it.
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
+
 // ---- Product -> package mapping ----
 // Keyed by the real product IDs from products.js. Products with pack-size
 // variants (postcards, pocket cards) are keyed as "id::variantLabel".
@@ -91,9 +100,14 @@ function buildParcelFromCart(cartItems) {
 }
 
 exports.handler = async function (event, context) {
+  if (event.httpMethod === "OPTIONS") {
+    return { statusCode: 200, headers: CORS_HEADERS, body: "" };
+  }
+
   if (event.httpMethod !== "POST") {
     return {
       statusCode: 405,
+      headers: CORS_HEADERS,
       body: JSON.stringify({ error: "Method not allowed" }),
     };
   }
@@ -107,6 +121,7 @@ exports.handler = async function (event, context) {
     if (!items || !items.length || !address) {
       return {
         statusCode: 400,
+        headers: CORS_HEADERS,
         body: JSON.stringify({ error: "Missing items or address" }),
       };
     }
@@ -146,6 +161,7 @@ exports.handler = async function (event, context) {
       console.error("EasyPost error:", data);
       return {
         statusCode: 500,
+        headers: CORS_HEADERS,
         body: JSON.stringify({ error: "Failed to fetch rates" }),
       };
     }
@@ -159,6 +175,7 @@ exports.handler = async function (event, context) {
     if (!groundRate) {
       return {
         statusCode: 404,
+        headers: CORS_HEADERS,
         body: JSON.stringify({ error: "No matching rate found", rates: data.rates }),
       };
     }
@@ -173,6 +190,7 @@ exports.handler = async function (event, context) {
 
     return {
       statusCode: 200,
+      headers: CORS_HEADERS,
       body: JSON.stringify({
         shipmentId: data.id, // needed later if you want to buy a label
         options: {
@@ -198,6 +216,7 @@ exports.handler = async function (event, context) {
     console.error(err);
     return {
       statusCode: 500,
+      headers: CORS_HEADERS,
       body: JSON.stringify({ error: err.message }),
     };
   }
