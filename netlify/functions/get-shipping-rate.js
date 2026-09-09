@@ -135,6 +135,9 @@ exports.handler = async function (event, context) {
       state: address.state,
       zip: address.postal_code,
       country: "US",
+      // Ask EasyPost to actually verify this address is a real, deliverable
+      // USPS location — not just calculate a rate for whatever ZIP was typed.
+      verify: ["delivery"],
     };
 
     const parcel = buildParcelFromCart(items);
@@ -164,6 +167,25 @@ exports.handler = async function (event, context) {
         statusCode: 500,
         headers: CORS_HEADERS,
         body: JSON.stringify({ error: "Failed to fetch rates" }),
+      };
+    }
+
+    // Check whether the destination address actually verified as a real,
+    // deliverable location — not just a valid-looking ZIP/state combo.
+    const deliveryCheck = data.to_address?.verifications?.delivery;
+    if (deliveryCheck && deliveryCheck.success === false) {
+      const reasons = (deliveryCheck.errors || [])
+        .map((e) => e.message)
+        .filter(Boolean)
+        .join(" ");
+      return {
+        statusCode: 422,
+        headers: CORS_HEADERS,
+        body: JSON.stringify({
+          error: reasons
+            ? `We couldn't verify that address: ${reasons} Please double-check it and try again.`
+            : "We couldn't verify that address. Please double-check it and try again.",
+        }),
       };
     }
 
