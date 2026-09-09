@@ -17,8 +17,8 @@ const EASYPOST_API_KEY = process.env.EASYPOST_API_KEY;
 
 // Your EasyPost Sender and Return Address IDs (from Shipping Settings >
 // Sender Addresses in the EasyPost dashboard).
-const FROM_ADDRESS_ID = "adr_cb5390b3929f11f1a55600224804dbec";
-const RETURN_ADDRESS_ID = "adr_4cf3417192a011f1bfe0002248041e50";
+const FROM_ADDRESS_ID = "adr_02ab5df8ac0211f194390022480b361d";
+const RETURN_ADDRESS_ID = "adr_02ab5df8ac0211f194390022480b361d";
 
 // Flat price you charge the customer for express shipping, regardless of
 // EasyPost's actual Priority Mail cost. This is a fixed customer-facing
