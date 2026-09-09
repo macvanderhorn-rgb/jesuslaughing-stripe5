@@ -94,7 +94,7 @@ exports.handler = async (event) => {
   }
 
   try {
-    const { items, address, promoCode, validateOnly } = JSON.parse(event.body);
+    const { items, address, promoCode, validateOnly, shipping } = JSON.parse(event.body);
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return {
@@ -139,13 +139,29 @@ exports.handler = async (event) => {
       };
     }
 
+    if (!shipping || typeof shipping.price !== 'number') {
+      return {
+        statusCode: 400,
+        headers: CORS_HEADERS,
+        body: JSON.stringify({ error: 'A shipping method must be selected.' }),
+      };
+    }
+
+    // Trust only the price coming back from your own get-shipping-rate
+    // function's response shape ({ label, service, price }) - never a raw
+    // number typed/edited in the browser.
+    const shippingCents = Math.round(shipping.price * 100);
+
     const discountedSubtotal = subtotalCents - promoResult.discountCents;
 
     // Flat 6% Michigan sales tax only — $0 for every other state until
-    // you register elsewhere. Tax is calculated on the post-discount amount.
+    // you register elsewhere. Tax is calculated on the post-discount
+    // subtotal PLUS shipping, since Michigan taxes shipping charges tied
+    // to a taxable sale.
     const state = String(address.state || '').trim().toUpperCase();
-    const tax = state === 'MI' ? Math.round(discountedSubtotal * MI_TAX_RATE) : 0;
-    const total = discountedSubtotal + tax;
+    const taxableAmount = discountedSubtotal + shippingCents;
+    const tax = state === 'MI' ? Math.round(taxableAmount * MI_TAX_RATE) : 0;
+    const total = discountedSubtotal + tax + shippingCents;
 
     const paymentIntent = await stripe.paymentIntents.create({
       amount: total,
@@ -157,6 +173,8 @@ exports.handler = async (event) => {
         promo_code: promoResult.code || '',
         discount_cents: String(promoResult.discountCents),
         tax_cents: String(tax),
+        shipping_cents: String(shippingCents),
+        shipping_service: shipping.service || '',
       },
     });
 
@@ -169,6 +187,7 @@ exports.handler = async (event) => {
         promoCode: promoResult.code,
         promoValid: promoResult.valid,
         discount: promoResult.discountCents,
+        shipping: shippingCents,
         tax,
         total,
       }),
