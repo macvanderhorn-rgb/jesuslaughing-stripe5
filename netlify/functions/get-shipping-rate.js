@@ -20,10 +20,11 @@ const EASYPOST_API_KEY = process.env.EASYPOST_API_KEY;
 const FROM_ADDRESS_ID = "adr_02ab5df8ac0211f194390022480b361d";
 const RETURN_ADDRESS_ID = "adr_02ab5df8ac0211f194390022480b361d";
 
-// Flat price you charge the customer for express shipping, regardless of
-// EasyPost's actual Priority Mail cost. This is a fixed customer-facing
-// price, not a pass-through of the real carrier rate.
-const EXPRESS_FLAT_PRICE = 15.0;
+// Markup added on top of EasyPost's real-time USPS Priority Mail rate to
+// get the customer-facing express price. E.g. if Priority actually costs
+// $9.40, the customer sees $12.40. This scales with distance/weight instead
+// of being a fixed price regardless of the real cost.
+const EXPRESS_MARKUP = 3.0;
 
 // Needed because your site (jesuslaughing.shop) and this function
 // (jesuslaughing.netlify.app) are on different domains — without these
@@ -181,12 +182,20 @@ exports.handler = async function (event, context) {
     }
 
     // Express option: USPS Priority Mail (1-3 business days, NOT overnight),
-    // but charged to the customer at your flat $15 price rather than
-    // EasyPost's actual Priority rate. The real Priority rate is looked up
-    // only so you can see your margin in the response/logs if useful.
+    // priced as the real EasyPost Priority rate plus your flat markup.
     const priorityRate = data.rates.find(
       (r) => r.carrier === "USPS" && r.service === "Priority"
     );
+
+    if (!priorityRate) {
+      return {
+        statusCode: 404,
+        headers: CORS_HEADERS,
+        body: JSON.stringify({ error: "No express rate available for this address", rates: data.rates }),
+      };
+    }
+
+    const expressPrice = Math.round((parseFloat(priorityRate.rate) + EXPRESS_MARKUP) * 100) / 100;
 
     return {
       statusCode: 200,
@@ -202,12 +211,12 @@ exports.handler = async function (event, context) {
           },
           express: {
             label: "Express Shipping",
-            service: priorityRate ? priorityRate.service : "Priority",
-            price: EXPRESS_FLAT_PRICE, // flat customer-facing price
+            service: priorityRate.service,
+            price: expressPrice, // real Priority rate + markup
             currency: "USD",
             // actualCost is for your own reference/margin tracking only —
             // don't display this to the customer.
-            actualCost: priorityRate ? parseFloat(priorityRate.rate) : null,
+            actualCost: parseFloat(priorityRate.rate),
           },
         },
       }),
